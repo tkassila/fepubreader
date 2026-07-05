@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 
 // Tuodaan aiemmin luodut palveluluokat ja lukunäkymät
@@ -89,20 +90,22 @@ class _ListBookPageState extends State<ListBookPage> {
 
   // Metodi uusien kirjojen valitsemiseen ja kopioimiseen sovelluksen kansioon
   Future<void> _lisaaUusiaKirjoja() async {
-    const XTypeGroup typeGroup = XTypeGroup(
-      label: 'Kirjat',
-      extensions: <String>['pdf', 'epub'],
+    final FilePickerResult? result = await FilePicker.pickFiles(
+      allowMultiple: true,
+      type: FileType.custom,
+      allowedExtensions: ['pdf', 'epub'],
     );
 
-    final List<XFile> files = await openFiles(acceptedTypeGroups: <XTypeGroup>[typeGroup]);
-
-    if (files.isNotEmpty) {
+    if (result != null && result.files.isNotEmpty) {
       int lisatytMaara = 0;
       bool naytaSkipped = false;
 
-      for (var file in files) {
-        final String kohdePolku = p.join(widget.directoryPath, file.name);
-        final String uusiNimiIlmanPaatetta = p.basenameWithoutExtension(file.name);
+      for (var file in result.files) {
+        if (file.path == null) continue;
+
+        final String fileName = file.name;
+        final String kohdePolku = p.join(widget.directoryPath, fileName);
+        final String uusiNimiIlmanPaatetta = p.basenameWithoutExtension(fileName);
 
         // Tarkistetaan, löytyykö kirja jo nykyisestä listasta (polun tai nimen perusteella)
         final bool onJoListalla = _kirjat.any((kirja) =>
@@ -127,8 +130,15 @@ class _ListBookPageState extends State<ListBookPage> {
           continue;
         }
 
-        await File(file.path).copy(kohdePolku);
-        lisatytMaara++;
+        try {
+          await File(file.path!).copy(kohdePolku);
+          lisatytMaara++;
+        } catch (e) {
+          setState(() {
+            _skippedBooks.add(SkippedBook(uusiNimiIlmanPaatetta, "Virhe"));
+          });
+          naytaSkipped = true;
+        }
       }
 
       // Päivitetään näkymä jos jotain lisättiin

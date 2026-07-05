@@ -26,14 +26,25 @@ void main() async {
   // Varmistetaan, että Flutter-ympäristö on valmis ennen asynkronisia kutsuja
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Varmistetaan sovelluksen dokumenttihakemiston olemassaolo
+  // Varmistetaan sovelluksen dokumenttihakemiston ja 'Kirjat'-kansion olemassaolo
   final Directory docDir = await getApplicationDocumentsDirectory();
-  if (!await docDir.exists()) {
-    await docDir.create(recursive: true);
+  final String oletusKirjatPolku = "${docDir.path}/Kirjat";
+  final Directory oletusKirjatKansio = Directory(oletusKirjatPolku);
+  
+  if (!await oletusKirjatKansio.exists()) {
+    await oletusKirjatKansio.create(recursive: true);
   }
 
-  // 1. Haetaan ja luodaan sovelluksen oma suojattu kirjakansio dynaamisesti
+  // 1. Haetaan ja luodaan sovelluksen oma suojattu kirjakansio dynaamisesti (esim. SD-kortilta)
   String? kirjakansioPolku = await _haeTaiLuoSuojattuKansio();
+  
+  // Varmistetaan, että myös tämä hakemisto luodaan jos se eroaa oletuksesta
+  if (kirjakansioPolku != null) {
+    final Directory extKirjatKansio = Directory(kirjakansioPolku);
+    if (!await extKirjatKansio.exists()) {
+      await extKirjatKansio.create(recursive: true);
+    }
+  }
 
   // 2. Tarkistetaan muistista, onko jokin kirja jäänyt viimeksi kesken
   final prefs = await SharedPreferences.getInstance();

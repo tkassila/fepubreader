@@ -1,5 +1,6 @@
 import 'dart:io';
-import 'package:pdfx/pdfx.dart';
+import 'package:flutter/material.dart';
+import 'package:pdf_thumbnail/pdf_thumbnail.dart';
 import 'package:epubx/epubx.dart';
 
 import 'dart:convert'; // Tarjoaa: utf8
@@ -184,24 +185,25 @@ class IndexedBookScanner {
           }
 
           if (!await kuvaTiedosto.exists()) {
-            Uint8List? tavut;
             try {
               if (ext == '.pdf') {
-                final doc = await PdfDocument.openFile(entity.path);
-                final sivu = await doc.getPage(1);
-                final renderointi = await sivu.render(width: sivu.width / 4, height: sivu.height / 4, format: PdfPageImageFormat.png);
-                tavut = renderointi?.bytes;
-                await doc.close();
+                // Generoidaan PDF-thumbnail pdf_thumbnail pluginilla
+                await PdfThumbnail.fromFile(
+                  entity.path,
+                  currentPage: 1,
+                  height: 200,
+                  backgroundColor: Colors.white10,
+                );
               } else {
+                Uint8List? tavut;
                 List<int> epubTavut = await entity.readAsBytes();
                 EpubBook epub = await EpubReader.readBook(epubTavut);
                 if (epub.CoverImage != null) {
                   tavut = Uint8List.fromList(epub.CoverImage! as List<int>);
                 }
-              }
-
-              if (tavut != null) {
-                await kuvaTiedosto.writeAsBytes(tavut);
+                if (tavut != null) {
+                  await kuvaTiedosto.writeAsBytes(tavut);
+                }
               }
             } catch (e) {
               print("Virhe thumbnailin luonnissa ($title): $e");

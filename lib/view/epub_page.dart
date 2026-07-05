@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:epubx/epubx.dart';
+import 'package:flutter_html/flutter_html.dart';
+import 'package:flutter_html_all/flutter_html_all.dart';
 import '../data/indexed_book_scanner.dart';
 
 class EpubLukuruutu extends StatefulWidget {
@@ -25,6 +27,7 @@ class _EpubLukuruutuState extends State<EpubLukuruutu> {
   bool _ladataan = true;
   int _nykyinenSivu = 1;
   bool _kaksiNayttoa = false;
+  double _fontSize = 18.0;
 
   @override
   void initState() {
@@ -88,6 +91,12 @@ class _EpubLukuruutuState extends State<EpubLukuruutu> {
     });
   }
 
+  void _muutaZoom(double kerroin) {
+    setState(() {
+      _fontSize = (_fontSize * kerroin).clamp(12.0, 40.0);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_ladataan) {
@@ -98,49 +107,104 @@ class _EpubLukuruutuState extends State<EpubLukuruutu> {
       appBar: AppBar(
         title: Text('${_kirja?.Title ?? "EPUB"} - Sivu $_nykyinenSivu'),
         backgroundColor: Colors.greenAccent,
+        elevation: 0, // Poistetaan varjo yläreunasta
         actions: [
+          IconButton(
+            icon: const Icon(Icons.zoom_out),
+            onPressed: () => _muutaZoom(0.9),
+            tooltip: 'Pienennä tekstiä',
+          ),
+          Center(
+            child: Text(
+              "${((_fontSize / 18.0) * 100).toInt()}%",
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.zoom_in),
+            onPressed: () => _muutaZoom(1.1),
+            tooltip: 'Suurenna tekstiä',
+          ),
+          const SizedBox(width: 8),
           Row(
             children: [
-              const Text("2 näkymää", style: TextStyle(fontSize: 14)),
+              const Text("2 näkymää", style: TextStyle(fontSize: 12)),
               Checkbox(
                 value: _kaksiNayttoa,
                 onChanged: _vaihdaKaksiNayttoa,
               ),
             ],
           ),
+          const SizedBox(width: 8),
         ],
       ),
-      // PageView mahdollistaa kirjan sivujen selaamisen pyyhkäisemällä sivusuunnassa
-      body: _kaksiNayttoa
-          ? Row(
-              children: [
-                Expanded(child: _buildEpubView(_sivuOhjain)),
-                const VerticalDivider(width: 1, color: Colors.black26),
-                Expanded(
-                  child: _sivuOhjain2 != null
-                      ? _buildEpubView(_sivuOhjain2!)
-                      : const Center(child: CircularProgressIndicator()),
-                ),
-              ],
-            )
-          : _buildEpubView(_sivuOhjain),
+      body: Column(
+        children: [
+          Expanded(
+            child: _kaksiNayttoa
+                ? Column(
+                    children: [
+                      Expanded(child: _buildEpubView(_sivuOhjain)),
+                      const VerticalDivider(width: 1, color: Colors.black26),
+                      Expanded(
+                        child: _sivuOhjain2 != null
+                            ? _buildEpubView(_sivuOhjain2!)
+                            : const Center(child: CircularProgressIndicator()),
+                      ),
+                    ],
+                  )
+                : _buildEpubView(_sivuOhjain),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildEpubView(PageController controller) {
-    return PageView.builder(
+    return
+      PageView.builder(
+        controller: controller,
+        itemCount: _kappaleet.length,
+        itemBuilder: (context, index) {
+          final kappale = _kappaleet[index];
+          return Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: SingleChildScrollView(
+              child: Html(
+                data: kappale.HtmlContent,
+                style: {
+                  "body": Style(
+                    fontSize: FontSize(_fontSize),
+                    lineHeight: LineHeight.number(1.5),
+                    textAlign: TextAlign.justify,
+                  ),
+                  "p": Style(
+                    margin: Margins.only(bottom: 10.0),
+                  ),
+                },
+              ),
+            ),
+          );
+        },
+      );
+
+    /*
+    PageView.builder(
       controller: controller,
       itemCount: _kappaleet.length,
       itemBuilder: (context, index) {
         final kappale = _kappaleet[index];
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16.0),
-          child: Text(
-            kappale.HtmlContent ?? '', // Oikeassa sovelluksessa tämä kannattaa ajaa esim. flutter_html -widgetin läpi
-            style: const TextStyle(fontSize: 16, height: 1.5),
-          ),
+        return ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          children: [
+            Text(
+              kappale.HtmlContent ?? '', // Oikeassa sovelluksessa tämä kannattaa ajaa esim. flutter_html -widgetin läpi
+              style: const TextStyle(fontSize: 16, height: 1.5),
+            ),
+          ],
         );
       },
     );
+    */
   }
 }
