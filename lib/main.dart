@@ -1,87 +1,105 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import 'dart:io';
 
+import './util/permission_helper.dart';
 // Tuodaan kaikki aiemmin luodut komponentit projektistasi
-import './data/indexed_book_scanner.dart';
 import './view/list_book_page.dart';
 import './view/pdf_page.dart';
 import './view/epub_page.dart';
 
-/// Hakee Android-järjestelmän sovelluskohtaisen tallennushakemiston dynaamisesti
-/// ja luo sinne alikansion 'Kirjat', jos sitä ei ole vielä olemassa.
-Future<String?> _haeTaiLuoSuojattuKansio() async {
-  // Haetaan Androidin getExternalFilesDir() -polku dynaamisesti.
-  // Palauttaa polun muodossa: /storage/emulated/0/Android/data/com.sinunyritys.sovellus/files
-  final Directory? extDir = await getExternalStorageDirectory();
-
-  if (extDir == null) {
-    throw Exception("Puhelimen ulkoiseen tallennustilaan ei saatu yhteyttä.");
+/// Hakee ja luo sisäisen muistin /Books-hakemiston kirjoille (.pdf ja .epub).
+/// Androidissa aina sisäisen muistin standardi /storage/emulated/0/Books.
+Future<String> _haeTaiLuoBooksKansio() async {
+  if (Platform.isAndroid) {
+    const String androidBooksPolku = '/storage/emulated/0/Books';
+    final standardiBooks = Directory(androidBooksPolku);
+    try {
+      if (!await standardiBooks.exists()) {
+        await standardiBooks.create(recursive: true);
+      }
+    } catch (_) {}
+    return androidBooksPolku;
   }
-  return "${extDir.path}/Kirjat";
+
+  // Muut alustat (Linux, Windows, Desktop)
+  final docDir = await getApplicationDocumentsDirectory();
+  final fallbackBooks = Directory(p.join(docDir.path, 'Books'));
+  if (!await fallbackBooks.exists()) {
+    try {
+      await fallbackBooks.create(recursive: true);
+    } catch (_) {}
+  }
+  return fallbackBooks.path;
+}
+
+/// Siirtää tai kopioi aiemmin vanhoissa 'Kirjat'-kansioissa olleet kirjat uuteen /Books-kansioon
+Future<void> _migroiVanhatKirjatJosTarpeen(String uusiBooksPolku) async {
+  try {
+    final extDir = await getExternalStorageDirectory();
+    final docDir = await getApplicationDocumentsDirectory();
+    final List<Directory> vanhatKansiot = [
+      if (extDir != null) Directory('${extDir.path}/Kirjat'),
+      Directory('${docDir.path}/Kirjat'),
+    ];
+
+    final uusiDir = Directory(uusiBooksPolku);
+    for (final vanha in vanhatKansiot) {
+      if (await vanha.exists()) {
+        final files = vanha.listSync().whereType<File>();
+        for (final file in files) {
+          final ext = p.extension(file.path).toLowerCase();
+          if (ext == '.pdf' || ext == '.epub') {
+            final kohdePolku = p.join(uusiDir.path, p.basename(file.path));
+            if (!File(kohdePolku).existsSync()) {
+              await file.copy(kohdePolku);
+            }
+          }
+        }
+      }
+    }
+  } catch (_) {}
 }
 
 void main() async {
   // Varmistetaan, että Flutter-ympäristö on valmis ennen asynkronisia kutsuja
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Varmistetaan sovelluksen dokumenttihakemiston ja 'Kirjat'-kansion olemassaolo
-  final Directory docDir = await getApplicationDocumentsDirectory();
-  final String oletusKirjatPolku = "${docDir.path}/Kirjat";
-  final Directory oletusKirjatKansio = Directory(oletusKirjatPolku);
-  
-  if (!await oletusKirjatKansio.exists()) {
-    await oletusKirjatKansio.create(recursive: true);
-  }
+  // Pyydetään laitteen tallennustilaoikeus (Kaikkien tiedostojen hallinta) /Books-kansiota varten
+  await PermissionHelper.pyydaTallennustilaOikeus();
 
-  // 1. Haetaan ja luodaan sovelluksen oma suojattu kirjakansio dynaamisesti (esim. SD-kortilta)
-  String? kirjakansioPolku = await _haeTaiLuoSuojattuKansio();
-  
-  // Varmistetaan, että myös tämä hakemisto luodaan jos se eroaa oletuksesta
-  if (kirjakansioPolku != null) {
-    final Directory extKirjatKansio = Directory(kirjakansioPolku);
-    if (!await extKirjatKansio.exists()) {
-      await extKirjatKansio.create(recursive: true);
-    }
-  }
+  // 1. Haetaan ja luodaan sisäisen muistin /Books-kansio
+  final String kirjakansioPolku = await _haeTaiLuoBooksKansio();
 
-  // 2. Tarkistetaan muistista, onko jokin kirja jäänyt viimeksi kesken
+  // 2. Migroidaan mahdolliset aiemmat kirjat vanhoista kansioista /Books-kansioon
+  await _migroiVanhatKirjatJosTarpeen(kirjakansioPolku);
+
+  // 3. Tarkistetaan muistista, onko jokin kirja jäänyt viimeksi kesken
   final prefs = await SharedPreferences.getInstance();
   String? viimeisinKirjaPolku = prefs.getString('viimeksi_luettu_polku');
   int viimeisinSivu = prefs.getInt('viimeksi_luettu_sivu') ?? 1;
+  double viimeisinOffset = prefs.getDouble('viimeksi_luettu_offset') ?? 0.0;
   bool? oliPdf = prefs.getBool('viimeksi_luettu_olipdf');
 
   // Varmistetaan vielä, että kyseinen tiedosto on edelleen olemassa levyllä
   bool kirjaLoytyy = viimeisinKirjaPolku != null && File(viimeisinKirjaPolku).existsSync();
 
   runApp(Lukusovellus(
-    kirjakansioPolku: kirjakansioPolku!,
+    kirjakansioPolku: kirjakansioPolku,
     automaattiAvausPolku: kirjaLoytyy ? viimeisinKirjaPolku : null,
     automaattiAvausSivu: viimeisinSivu,
+    automaattiAvausScrollRatio: viimeisinOffset,
     automaattiAvausOliPdf: oliPdf ?? true,
   ));
-}
-
-// Apufunktio, joka hakee Androidin getExternalFilesDir() -polun turvallisesti
-Future<String> _haeTaiLuoSuoxattuKansio() async {
-  final Directory? extDir = await getExternalStorageDirectory();
-  if (extDir == null) {
-    throw Exception("Tallennustilaan ei saatu yhteyttä.");
-  }
-  final String kirjatPolku = "${extDir.path}/Kirjat";
-  final Directory kirjakansio = Directory(kirjatPolku);
-
-  if (!await kirjakansio.exists()) {
-    await kirjakansio.create(recursive: true);
-  }
-  return kirjatPolku;
 }
 
 class Lukusovellus extends StatelessWidget {
   final String kirjakansioPolku;
   final String? automaattiAvausPolku;
   final int automaattiAvausSivu;
+  final double automaattiAvausScrollRatio;
   final bool automaattiAvausOliPdf;
 
   const Lukusovellus({
@@ -89,6 +107,7 @@ class Lukusovellus extends StatelessWidget {
     required this.kirjakansioPolku,
     this.automaattiAvausPolku,
     required this.automaattiAvausSivu,
+    this.automaattiAvausScrollRatio = 0.0,
     required this.automaattiAvausOliPdf,
   });
 
@@ -106,6 +125,7 @@ class Lukusovellus extends StatelessWidget {
         kirjakansioPolku: kirjakansioPolku,
         automaattiAvausPolku: automaattiAvausPolku,
         automaattiAvausSivu: automaattiAvausSivu,
+        automaattiAvausScrollRatio: automaattiAvausScrollRatio,
         automaattiAvausOliPdf: automaattiAvausOliPdf,
       ),
     );
@@ -117,6 +137,7 @@ class AloituksenOhjaaja extends StatefulWidget {
   final String kirjakansioPolku;
   final String? automaattiAvausPolku;
   final int automaattiAvausSivu;
+  final double automaattiAvausScrollRatio;
   final bool automaattiAvausOliPdf;
 
   const AloituksenOhjaaja({
@@ -124,6 +145,7 @@ class AloituksenOhjaaja extends StatefulWidget {
     required this.kirjakansioPolku,
     this.automaattiAvausPolku,
     required this.automaattiAvausSivu,
+    this.automaattiAvausScrollRatio = 0.0,
     required this.automaattiAvausOliPdf,
   });
 
@@ -133,7 +155,7 @@ class AloituksenOhjaaja extends StatefulWidget {
 
 class _AloituksenOhjaajaState extends State<AloituksenOhjaaja> {
 
-  bool _bDebug = false;
+  final bool _bDebug = false;
 
   @override
   void initState() {
@@ -148,15 +170,22 @@ class _AloituksenOhjaajaState extends State<AloituksenOhjaaja> {
     if (widget.automaattiAvausPolku != null) {
       // 1. Avataan viimeksi kesken jäänyt dokumentti automaattisesti
       if (_bDebug) {
-        print("Automaattiavaus aktivoitu tiedostolle: ${widget.automaattiAvausPolku}");
+        debugPrint("Automaattiavaus aktivoitu tiedostolle: ${widget.automaattiAvausPolku}");
       }
 
       await Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => widget.automaattiAvausOliPdf
-              ? PdfLukuruutu(tiedostoPolku: widget.automaattiAvausPolku!, aloitusSivu: widget.automaattiAvausSivu)
-              : EpubLukuruutu(tiedostoPolku: widget.automaattiAvausPolku!, aloitusSivu: widget.automaattiAvausSivu),
+              ? PdfLukuruutu(
+                  tiedostoPolku: widget.automaattiAvausPolku!,
+                  aloitusSivu: widget.automaattiAvausSivu,
+                )
+              : EpubLukuruutu(
+                  tiedostoPolku: widget.automaattiAvausPolku!,
+                  aloitusSivu: widget.automaattiAvausSivu,
+                  aloitusScrollRatio: widget.automaattiAvausScrollRatio,
+                ),
         ),
       );
     }

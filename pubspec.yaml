@@ -5,7 +5,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.12.2
+  sdk: ^3.11.5
 
 dependencies:
   flutter:
@@ -14,16 +14,23 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_screenutil: ^5.9.3
   path: ^1.9.1
-  epubx: ^4.0.0
   path_provider: ^2.1.6
   shared_preferences: ^2.5.5
   crypto: ^3.0.6
   file_selector: ^1.1.0
-  file_picker: ^11.0.2
+  file_picker: ^13.4.1
   flutter_html: ^3.0.0
   flutter_html_all: ^3.0.0
-  flutter_pdfview: ^1.4.4
-  pdf_thumbnail: ^0.1.6+1
+  flutter_widget_from_html: ^0.17.4
+  pdfrx: ^3.1.0
+  epub_plus: ^5.1.0
+  archive: ^4.0.2
+  image: ^4.5.4
+  url_launcher: ^6.3.3
+  http: ^1.6.0
+  speech_to_text: ^7.5.0
+  permission_handler: ^13.0.2
+  flutter_tts: ^4.2.5
 
 dev_dependencies:
   flutter_test:
