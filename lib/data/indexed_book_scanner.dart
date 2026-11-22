@@ -277,6 +277,7 @@ class IndexedBook {
   List<String> tags;      // Tagit / aihealueet
   String series;          // Kirjan sarja
   String seriesNumber;    // Sarjan osanumero
+  bool hasCustomMetadata; // Onko käyttäjä muokannut/tallentanut metatiedot
 
   IndexedBook({
     required this.title,
@@ -295,6 +296,7 @@ class IndexedBook {
     this.tags = const [],
     this.series = '',
     this.seriesNumber = '',
+    this.hasCustomMetadata = false,
   });
 
   Map<String, dynamic> toJson() => {
@@ -314,6 +316,7 @@ class IndexedBook {
     'tags': tags,
     'series': series,
     'seriesNumber': seriesNumber,
+    'hasCustomMetadata': hasCustomMetadata,
   };
 
   factory IndexedBook.fromJson(Map<String, dynamic> json) => IndexedBook(
@@ -337,6 +340,7 @@ class IndexedBook {
         const [],
     series: TextEncodingHelper.korjaaMerkistovirheet(json['series'] ?? ''),
     seriesNumber: json['seriesNumber']?.toString() ?? '',
+    hasCustomMetadata: json['hasCustomMetadata'] == true,
   );
 
   /// Palauttaa kansikuvan polun synkronisesti välimuistista ilman levy- tai
@@ -648,9 +652,10 @@ class IndexedBookScanner {
       final bool onUusiaKirjoja = levynPolut.any((polku) => !indeksoidutPolut.contains(polku));
       final bool onPoistettuja = indeksoidutPolut.any((polku) => !levynPolut.contains(polku));
 
-      // 3. Onko tiedostoja muokattu?
+      // 3. Onko tiedostoja muokattu? (Käyttäjän tallentamia kirjoja ei katsota muuttuneiksi)
       bool onMuuttuneita = false;
       for (final kirja in indeksi) {
+        if (kirja.hasCustomMetadata) continue;
         final int? mtime = levynMuokkausajat[kirja.path];
         if (mtime != null && mtime > kirja.fileModifiedTimestamp) {
           onMuuttuneita = true;
@@ -717,22 +722,19 @@ class IndexedBookScanner {
     int indeksi = nykyisetKirjat.indexWhere((k) => k.path == paivitettyKirja.path);
 
     if (indeksi != -1) {
+      paivitettyKirja.hasCustomMetadata = true;
+      try {
+        final f = File(paivitettyKirja.path);
+        if (f.existsSync()) {
+          paivitettyKirja.fileModifiedTimestamp = f.lastModifiedSync().millisecondsSinceEpoch;
+        }
+      } catch (_) {}
       nykyisetKirjat[indeksi] = paivitettyKirja;
-      final lajiteltu = _jarjestaKirjat(nykyisetKirjat);
-      await _tallennaIndeksi(lajiteltu);
-      _lahetaScanEvent(BookScanEvent(
-        books: List.unmodifiable(lajiteltu),
-        latestScannedBook: paivitettyKirja,
-        current: lajiteltu.length,
-        total: lajiteltu.length,
-        currentBookName: paivitettyKirja.title,
-        statusText: 'Metatiedot päivitetty: ${paivitettyKirja.title}',
-        isScanning: false,
-      ));
+      await _tallennaIndeksi(nykyisetKirjat);
     }
   }
 
-  /// Päivittää kirjan otsikon (metaotsikko) ja suorittaa uuden lajittelun kirjahyllyyn
+  /// Päivittää kirjan otsikon (metaotsikko) ja tallentaa sen
   static Future<bool> paivitaKirjanOtsikko(String tiedostoPolku, String uusiOtsikko) async {
     final cleanTitle = uusiOtsikko.trim().replaceAll(RegExp(r'\s+'), ' ');
     if (cleanTitle.isEmpty) return false;
@@ -741,18 +743,16 @@ class IndexedBookScanner {
     int indeksi = nykyisetKirjat.indexWhere((k) => k.path == tiedostoPolku);
 
     if (indeksi != -1) {
-      nykyisetKirjat[indeksi].title = cleanTitle;
-      final lajiteltu = _jarjestaKirjat(nykyisetKirjat);
-      await _tallennaIndeksi(lajiteltu);
-      _lahetaScanEvent(BookScanEvent(
-        books: List.unmodifiable(lajiteltu),
-        latestScannedBook: nykyisetKirjat[indeksi],
-        current: lajiteltu.length,
-        total: lajiteltu.length,
-        currentBookName: cleanTitle,
-        statusText: 'Kirjan otsikko päivitetty: $cleanTitle',
-        isScanning: false,
-      ));
+      final kirja = nykyisetKirjat[indeksi];
+      kirja.title = cleanTitle;
+      kirja.hasCustomMetadata = true;
+      try {
+        final f = File(kirja.path);
+        if (f.existsSync()) {
+          kirja.fileModifiedTimestamp = f.lastModifiedSync().millisecondsSinceEpoch;
+        }
+      } catch (_) {}
+      await _tallennaIndeksi(nykyisetKirjat);
       return true;
     }
     return false;
@@ -1380,6 +1380,7 @@ class IndexedBookScanner {
       tags: tagit,
       series: sarja,
       seriesNumber: sarjanumero,
+      hasCustomMetadata: (vanhaKirja?.hasCustomMetadata ?? false) && !pakotaUudelleenSkannaus,
       isPdf: candidate.ext == '.pdf',
     );
   }
@@ -1446,9 +1447,10 @@ class IndexedBookScanner {
             fileInfo.muokkausaika > vanhaKirja.fileModifiedTimestamp ||
             (vanhaKirja.thumbnailPath.isNotEmpty && !fileInfo.kuvaOlemassa);
 
-        final bool pitaaLukeaMetatiedot = pakotaUudelleenSkannaus ||
+        final bool pitaaLukeaMetatiedot = (pakotaUudelleenSkannaus ||
             vanhaKirja == null ||
-            fileInfo.muokkausaika > vanhaKirja.fileModifiedTimestamp;
+            fileInfo.muokkausaika > vanhaKirja.fileModifiedTimestamp) &&
+            !(vanhaKirja?.hasCustomMetadata == true && !pakotaUudelleenSkannaus);
 
         if (vanhaKirja != null) {
           valmiitKirjat[fileInfo.path] = vanhaKirja;

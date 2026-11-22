@@ -10,6 +10,7 @@ import '../util/book_import_service.dart';
 import '../util/book_tts_service.dart';
 import '../util/permission_helper.dart';
 import '../util/reading_position_service.dart';
+import '../util/pdf_metadata_channel.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'pdf_page.dart';
 import 'epub_page.dart';
@@ -508,7 +509,11 @@ class _ListBookPageState extends State<ListBookPage> {
               ),
       ),
     );
-    _kaynnistaAutomaattinenLataus();
+    final indeksi = await IndexedBookScanner.lueIndeksi();
+    if (!mounted) return;
+    setState(() {
+      _kirjat = indeksi;
+    });
   }
 
   void _naytaSkippedBooksSivu() {
@@ -1110,95 +1115,190 @@ class _ListBookPageState extends State<ListBookPage> {
     final seriesCtrl = TextEditingController(text: kirja.series);
     final seriesNumCtrl = TextEditingController(text: kirja.seriesNumber);
     final tagsCtrl = TextEditingController(text: kirja.tags.join(', '));
+    bool erikoiskyselyKaynnissa = false;
+    String? erikoiskyselyStatus;
 
     final bool? tallenna = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Muokkaa kirjan tietoja'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (kirja.fileAddedTimestamp > 0 || kirja.fileModifiedTimestamp > 0) ...[
-                Builder(builder: (context) {
-                  final t = kirja.fileAddedTimestamp > 0 ? kirja.fileAddedTimestamp : kirja.fileModifiedTimestamp;
-                  final dt = DateTime.fromMillisecondsSinceEpoch(t);
-                  final pvm = '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8.0),
-                    child: Text(
-                      'Tuotu kirjahyllyyn: $pvm',
-                      style: TextStyle(fontSize: 11.5, color: Colors.blueGrey.shade700, fontStyle: FontStyle.italic),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Muokkaa kirjan tietoja'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (kirja.isPdf) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.shade200),
                     ),
-                  );
-                }),
-                const Divider(),
-              ],
-              _rakennaMuokkausKentta(
-                controller: titleCtrl,
-                labelText: 'Kirjan nimi',
-                prefixIcon: Icons.book,
-              ),
-              const SizedBox(height: 8),
-              _rakennaMuokkausKentta(
-                controller: authorCtrl,
-                labelText: 'Kirjailija',
-                prefixIcon: Icons.person,
-              ),
-              const SizedBox(height: 8),
-              _rakennaMuokkausKentta(
-                controller: publisherCtrl,
-                labelText: 'Kustantaja',
-                prefixIcon: Icons.business,
-              ),
-              const SizedBox(height: 8),
-              _rakennaMuokkausKentta(
-                controller: yearCtrl,
-                labelText: 'Julkaisuvuosi / -aika',
-                prefixIcon: Icons.calendar_today,
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    flex: 2,
-                    child: _rakennaMuokkausKentta(
-                      controller: seriesCtrl,
-                      labelText: 'Sarja',
-                      prefixIcon: Icons.collections_bookmark,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue.shade700,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                          ),
+                          icon: erikoiskyselyKaynnissa
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.auto_awesome, size: 20),
+                          label: Text(
+                            erikoiskyselyKaynnissa ? 'Luetaan metatietoja...' : 'Meta erikoiskysely',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          onPressed: erikoiskyselyKaynnissa
+                              ? null
+                              : () async {
+                                  setDialogState(() {
+                                    erikoiskyselyKaynnissa = true;
+                                    erikoiskyselyStatus = 'Analysoidaan PDFBox + juniversalchardet...';
+                                  });
+                                  final res = await PdfMetadataChannel.extractPdfMetadata(
+                                    kirja.path,
+                                    saveBackToPdf: true,
+                                  );
+                                  if (res != null && res.success) {
+                                    if (res.title.isNotEmpty) {
+                                      titleCtrl.text = res.title;
+                                    }
+                                    if (res.author.isNotEmpty) {
+                                      authorCtrl.text = res.author;
+                                    }
+                                    if (res.publisher.isNotEmpty) {
+                                      publisherCtrl.text = res.publisher;
+                                    }
+                                    if (res.publishDateText.isNotEmpty) {
+                                      yearCtrl.text = res.publishDateText;
+                                    }
+                                    if (res.tags.isNotEmpty) {
+                                      tagsCtrl.text = res.tags.join(', ');
+                                    }
+                                    setDialogState(() {
+                                      erikoiskyselyKaynnissa = false;
+                                      final tallennusInfo = res.savedToPdf ? ' (Tallennettu PDF-tiedostoon)' : '';
+                                      erikoiskyselyStatus = 'Tunnistettu merkistö: ${res.detectedCharset}$tallennusInfo';
+                                    });
+                                  } else {
+                                    setDialogState(() {
+                                      erikoiskyselyKaynnissa = false;
+                                      erikoiskyselyStatus = res?.error ?? 'Tietojen luku epäonnistui';
+                                    });
+                                  }
+                                },
+                        ),
+                        if (erikoiskyselyStatus != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            erikoiskyselyStatus!,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: erikoiskyselyStatus!.contains('epäonnistui')
+                                  ? Colors.red.shade700
+                                  : Colors.blue.shade900,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    flex: 1,
-                    child: _rakennaMuokkausKentta(
-                      controller: seriesNumCtrl,
-                      labelText: 'Osa #',
-                      naytaTyhjenna: false,
-                    ),
-                  ),
+                  const SizedBox(height: 10),
                 ],
-              ),
-              const SizedBox(height: 8),
-              _rakennaMuokkausKentta(
-                controller: tagsCtrl,
-                labelText: 'Tagit (erottele pilkulla)',
-                prefixIcon: Icons.label,
-              ),
-            ],
+                if (kirja.fileAddedTimestamp > 0 || kirja.fileModifiedTimestamp > 0) ...[
+                  Builder(builder: (context) {
+                    final t = kirja.fileAddedTimestamp > 0 ? kirja.fileAddedTimestamp : kirja.fileModifiedTimestamp;
+                    final dt = DateTime.fromMillisecondsSinceEpoch(t);
+                    final pvm = '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Text(
+                        'Tuotu kirjahyllyyn: $pvm',
+                        style: TextStyle(fontSize: 11.5, color: Colors.blueGrey.shade700, fontStyle: FontStyle.italic),
+                      ),
+                    );
+                  }),
+                  const Divider(),
+                ],
+                _rakennaMuokkausKentta(
+                  controller: titleCtrl,
+                  labelText: 'Kirjan nimi',
+                  prefixIcon: Icons.book,
+                ),
+                const SizedBox(height: 8),
+                _rakennaMuokkausKentta(
+                  controller: authorCtrl,
+                  labelText: 'Kirjailija',
+                  prefixIcon: Icons.person,
+                ),
+                const SizedBox(height: 8),
+                _rakennaMuokkausKentta(
+                  controller: publisherCtrl,
+                  labelText: 'Kustantaja',
+                  prefixIcon: Icons.business,
+                ),
+                const SizedBox(height: 8),
+                _rakennaMuokkausKentta(
+                  controller: yearCtrl,
+                  labelText: 'Julkaisuvuosi / -aika',
+                  prefixIcon: Icons.calendar_today,
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: _rakennaMuokkausKentta(
+                        controller: seriesCtrl,
+                        labelText: 'Sarja',
+                        prefixIcon: Icons.collections_bookmark,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 1,
+                      child: _rakennaMuokkausKentta(
+                        controller: seriesNumCtrl,
+                        labelText: 'Osa #',
+                        naytaTyhjenna: false,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                _rakennaMuokkausKentta(
+                  controller: tagsCtrl,
+                  labelText: 'Tagit (erottele pilkulla)',
+                  prefixIcon: Icons.label,
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Peruuta'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Tallenna'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Peruuta'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Tallenna'),
-          ),
-        ],
       ),
     );
 
@@ -1225,6 +1325,13 @@ class _ListBookPageState extends State<ListBookPage> {
           .map((t) => t.trim())
           .where((t) => t.isNotEmpty)
           .toList();
+      kirja.hasCustomMetadata = true;
+      try {
+        final f = File(kirja.path);
+        if (f.existsSync()) {
+          kirja.fileModifiedTimestamp = f.lastModifiedSync().millisecondsSinceEpoch;
+        }
+      } catch (_) {}
 
       await IndexedBookScanner.paivitaKirjanTiedot(kirja);
       if (mounted) {
@@ -1905,11 +2012,7 @@ class _ListBookPageState extends State<ListBookPage> {
                                         constraints: const BoxConstraints(maxWidth: 600),
                                         child: SizedBox(
                                           height: 116,
-                                          child: InkWell(
-                                            onTap: () => _avaaKirja(viimeisin),
-                                            onLongPress: () => _naytaMuokkausDialogi(viimeisin),
-                                            child: _buildBookCard(viimeisin, isHighlight: true),
-                                          ),
+                                          child: _buildBookCard(viimeisin, isHighlight: true),
                                         ),
                                       ),
                                       const SizedBox(height: 8),
@@ -1930,11 +2033,7 @@ class _ListBookPageState extends State<ListBookPage> {
                                 delegate: SliverChildBuilderDelegate(
                                   (context, index) {
                                     final kirja = muutKirjat[index];
-                                    return InkWell(
-                                      onTap: () => _avaaKirja(kirja),
-                                      onLongPress: () => _naytaMuokkausDialogi(kirja),
-                                      child: _buildBookCard(kirja),
-                                    );
+                                    return _buildBookCard(kirja);
                                   },
                                   childCount: muutKirjat.length,
                                 ),
@@ -1975,6 +2074,7 @@ class _ListBookPageState extends State<ListBookPage> {
     return Card(
       elevation: isHighlight ? 2.5 : 1.0,
       margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
       color: isHighlight ? Colors.blue.shade50.withValues(alpha: 0.4) : Colors.white,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
@@ -1984,184 +2084,209 @@ class _ListBookPageState extends State<ListBookPage> {
         ),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Kannen esikatselu (kevyt cacheWidth-dekoodaus ilman FutureBuilder- tai levykutsuja)
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: SizedBox(
-              width: 66,
-              height: 94,
-              child: (thumbPolku != null && thumbPolku.isNotEmpty)
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: Image.file(
-                        File(thumbPolku),
-                        fit: BoxFit.cover,
-                        cacheWidth: 180,
-                        filterQuality: FilterQuality.medium,
-                        key: ValueKey('${thumbPolku}_${kirja.fileModifiedTimestamp}'),
-                        errorBuilder: (context, error, stackTrace) =>
-                            _rakennaOletusKansiKuvake(kirja),
+          // 1. Vasen 85%: lukemisen avaaminen ja pitkä painallus muokkaukseen
+          Expanded(
+            flex: 85,
+            child: InkWell(
+              borderRadius: const BorderRadius.horizontal(left: Radius.circular(8)),
+              onTap: () => _avaaKirja(kirja),
+              onLongPress: () => _naytaMuokkausDialogi(kirja),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Kannen esikatselu (kevyt cacheWidth-dekoodaus ilman FutureBuilder- tai levykutsuja)
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: SizedBox(
+                      width: 66,
+                      height: 94,
+                      child: (thumbPolku != null && thumbPolku.isNotEmpty)
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: Image.file(
+                                File(thumbPolku),
+                                fit: BoxFit.cover,
+                                cacheWidth: 180,
+                                filterQuality: FilterQuality.medium,
+                                key: ValueKey('${thumbPolku}_${kirja.fileModifiedTimestamp}'),
+                                errorBuilder: (context, error, stackTrace) =>
+                                    _rakennaOletusKansiKuvake(kirja),
+                              ),
+                            )
+                          : _rakennaOletusKansiKuvake(kirja),
+                    ),
+                  ),
+
+                  // Kirjan metatiedot
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(4, 6, 6, 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // Nimi (täysi leveys tekstialueella, ilman oikean laidan ikonien ahdistamista)
+                          Text(
+                            kirja.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, height: 1.2),
+                          ),
+                          const SizedBox(height: 1),
+
+                          // Kirjailija
+                          if (kirja.author != 'Tuntematon' && kirja.author.isNotEmpty)
+                            Text(
+                              kirja.author,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 11, color: Colors.blueGrey[800], fontWeight: FontWeight.w500),
+                            ),
+
+                          // Kustantaja / Vuosi
+                          if (kirja.publisher != 'Tuntematon' || kirja.publishYear > 0)
+                            Text(
+                              [
+                                if (kirja.publisher != 'Tuntematon') kirja.publisher,
+                                if (kirja.publishYear > 0) '${kirja.publishYear}'
+                                else if (kirja.publishDateText != 'Tuntematon' && kirja.publishDateText.isNotEmpty) kirja.publishDateText,
+                              ].join(' • '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 9, color: Colors.grey[600]),
+                            ),
+
+                          // Sarja
+                          if (kirja.series.isNotEmpty)
+                            Text(
+                              'Sarja: ${kirja.series}${kirja.seriesNumber.isNotEmpty ? ' #${kirja.seriesNumber}' : ''}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 9, color: Colors.indigo, fontWeight: FontWeight.w600),
+                            ),
+
+                          // Tagit
+                          if (kirja.tags.isNotEmpty)
+                            Text(
+                              kirja.tags.take(3).join(', '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 8.5, color: Colors.teal.shade800, fontStyle: FontStyle.italic),
+                            ),
+
+                          // Alarivi: Lukukohta
+                          if (kirja.lastReadTimestamp > 0)
+                            Text(
+                              kirja.isPdf
+                                  ? 'Kohta: sivu ${kirja.lastReadPage}'
+                                  : 'Kohta: luku ${kirja.lastReadPage}',
+                              style: TextStyle(
+                                fontSize: 9.0,
+                                color: Colors.teal.shade700,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            )
+                          else if (kirja.tags.isNotEmpty)
+                            Text(
+                              kirja.tags.take(2).join(', '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 8.5, color: Colors.teal.shade800, fontStyle: FontStyle.italic),
+                            )
+                          else
+                            const SizedBox.shrink(),
+                        ],
                       ),
-                    )
-                  : _rakennaOletusKansiKuvake(kirja),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
 
-          // Kirjan metatiedot ja poistoikoni
+          // 2. Oikea 15%: ikonit ja niiden painallukset (ei avaa kirjaa)
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(4, 6, 8, 6),
+            flex: 15,
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border(
+                  left: BorderSide(
+                    color: isHighlight ? Colors.blue.shade100 : Colors.grey.shade100,
+                    width: 1.0,
+                  ),
+                ),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  // Nimi, muokkausikoni ja poistoikoni
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  // Ylhäällä: Muokkausikoni
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                    style: IconButton.styleFrom(
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    icon: Icon(Icons.edit_outlined, size: 18, color: Colors.blue.shade700),
+                    tooltip: 'Muokkaa kirjan metatietoja',
+                    onPressed: () => _naytaMuokkausDialogi(kirja),
+                  ),
+
+                  // Alhaalla: Poistoikoni aivan lähellä alapuolen PDF/EPUB-tekstejä
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Expanded(
-                        child: Text(
-                          kirja.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, height: 1.2),
-                        ),
-                      ),
                       IconButton(
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                        constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
                         style: IconButton.styleFrom(
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        icon: Icon(Icons.edit_outlined, size: 19, color: Colors.blue.shade700),
-                        tooltip: 'Muokkaa kirjan metatietoja',
-                        onPressed: () => _naytaMuokkausDialogi(kirja),
-                      ),
-                      IconButton(
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                        style: IconButton.styleFrom(
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        icon: Icon(Icons.delete_outline, size: 20, color: Colors.red.shade400),
+                        icon: Icon(Icons.delete_outline, size: 18, color: Colors.red.shade400),
                         tooltip: 'Poista kirja laitteelta',
                         onPressed: () => _vahvistaJaPoistaKirja(kirja),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 1),
-
-                  // Kirjailija
-                  if (kirja.author != 'Tuntematon' && kirja.author.isNotEmpty)
-                    Text(
-                      kirja.author,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 11, color: Colors.blueGrey[800], fontWeight: FontWeight.w500),
-                    ),
-
-                  // Kustantaja / Vuosi
-                  if (kirja.publisher != 'Tuntematon' || kirja.publishYear > 0)
-                    Text(
-                      [
-                        if (kirja.publisher != 'Tuntematon') kirja.publisher,
-                        if (kirja.publishYear > 0) '${kirja.publishYear}'
-                        else if (kirja.publishDateText != 'Tuntematon' && kirja.publishDateText.isNotEmpty) kirja.publishDateText,
-                      ].join(' • '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 9, color: Colors.grey[600]),
-                    ),
-
-                  // Sarja
-                  if (kirja.series.isNotEmpty)
-                    Text(
-                      'Sarja: ${kirja.series}${kirja.seriesNumber.isNotEmpty ? ' #${kirja.seriesNumber}' : ''}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 9, color: Colors.indigo, fontWeight: FontWeight.w600),
-                    ),
-
-                  // Tagit
-                  if (kirja.tags.isNotEmpty)
-                    Text(
-                      kirja.tags.take(3).join(', '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 8.5, color: Colors.teal.shade800, fontStyle: FontStyle.italic),
-                    ),
-
-                  // Alarivi: Lukukohta sekä oikealla PDF/EPUB-merkki Tuotu ... -tekstin päällä
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      if (kirja.lastReadTimestamp > 0)
-                        Text(
-                          kirja.isPdf
-                              ? 'Kohta: sivu ${kirja.lastReadPage}'
-                              : 'Kohta: luku ${kirja.lastReadPage}',
-                          style: TextStyle(
-                            fontSize: 9.0,
-                            color: Colors.teal.shade700,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        )
-                      else if (kirja.tags.isNotEmpty)
-                        Expanded(
-                          child: Text(
-                            kirja.tags.take(2).join(', '),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 8.5, color: Colors.teal.shade800, fontStyle: FontStyle.italic),
-                          ),
-                        )
-                      else
-                        const SizedBox.shrink(),
-
-                      // 1) Kirjakohtainen PDF tai EPUB -teksti/merkki Tuotu ... -tekstin päällä
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                            decoration: BoxDecoration(
-                              color: kirja.isPdf ? Colors.red.shade700 : Colors.teal.shade700,
-                              borderRadius: BorderRadius.circular(3),
+                      const SizedBox(height: 2),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
+                        decoration: BoxDecoration(
+                          color: kirja.isPdf ? Colors.red.shade700 : Colors.teal.shade700,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              kirja.isPdf ? Icons.picture_as_pdf : Icons.menu_book,
+                              size: 9,
+                              color: Colors.white,
                             ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  kirja.isPdf ? Icons.picture_as_pdf : Icons.menu_book,
-                                  size: 10,
-                                  color: Colors.white,
-                                ),
-                                const SizedBox(width: 3),
-                                Text(
-                                  kirja.isPdf ? 'PDF' : 'EPUB',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 8.5,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: 0.3,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (tuontiPvmStr.isNotEmpty) ...[
-                            const SizedBox(height: 2),
+                            const SizedBox(width: 2),
                             Text(
-                              'Tuotu: $tuontiPvmStr',
-                              style: TextStyle(fontSize: 8.5, color: Colors.blueGrey.shade400),
+                              kirja.isPdf ? 'PDF' : 'EPUB',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 8.0,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.3,
+                              ),
                             ),
                           ],
-                        ],
+                        ),
                       ),
+                      if (tuontiPvmStr.isNotEmpty) ...[
+                        const SizedBox(height: 1),
+                        Text(
+                          tuontiPvmStr,
+                          style: TextStyle(fontSize: 7.5, color: Colors.blueGrey.shade400),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ],
                   ),
                 ],
